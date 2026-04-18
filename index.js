@@ -1,5 +1,5 @@
 "use strict";
-
+ 
 const { addLog, getLogs } = require("./logger");
 const { startTelemetry } = require('./telemetry');
 const mineflayer = require("mineflayer");
@@ -11,28 +11,28 @@ const http = require("http");
 const https = require("https");
 const path = require("path");
 const fs = require("fs");
-
+ 
 const app = express();
 app.use(express.json());
 const PORT = process.env.PORT || 5000;
-
+ 
 let chatHistory = [];
 function addChat(username, message) {
   chatHistory.push({ username, message, time: Date.now() });
   if (chatHistory.length > 50) chatHistory = chatHistory.slice(-50);
 }
-
+ 
 let reconnectHistory = [];
 function addReconnectEvent(reason, type) {
   reconnectHistory.push({ reason, type, time: Date.now() });
   if (reconnectHistory.length > 20) reconnectHistory = reconnectHistory.slice(-20);
 }
-
+ 
 const CHAT_COOLDOWN_MS = 1200;
 let lastChatTime = 0;
 let chatQueue = [];
 let chatQueueTimer = null;
-
+ 
 function safeBotChat(message) {
   chatQueue.push(message);
   if (!chatQueueTimer) processQueue();
@@ -49,7 +49,7 @@ function processQueue() {
     processQueue();
   }, wait);
 }
-
+ 
 let botState = {
   connected: false,
   lastActivity: Date.now(),
@@ -64,7 +64,7 @@ let botState = {
   players: [],
   lastKickAnalysis: null,
 };
-
+ 
 let bot = null;
 let activeIntervals = [];
 let reconnectTimeoutId = null;
@@ -72,7 +72,7 @@ let connectionTimeoutId = null;
 let isReconnecting = false;
 let lastKickReason = null;
 let botRunning = true;
-
+ 
 function analyzeKickReason(reason) {
   const r = (reason || "").toLowerCase();
   if (r.includes("already connected") || r.includes("proxy"))
@@ -93,7 +93,7 @@ function analyzeKickReason(reason) {
     return { label: "Server Offline / Starting", color: "#64748b", icon: "💤", tip: "Server is sleeping or starting up." };
   return { label: "Unknown Kick", color: "#94a3b8", icon: "❓", tip: reason || "No reason provided." };
 }
-
+ 
 // ── HEALTH ──────────────────────────────────────────────────
 app.get("/health", (req, res) => {
   const players = bot && bot.players
@@ -123,11 +123,11 @@ app.get("/health", (req, res) => {
     botRunning,
   });
 });
-
+ 
 app.get("/chat-history", (req, res) => res.json(chatHistory));
 app.get("/logs-json", (req, res) => res.json(getLogs().slice(-100)));
 app.get("/ping", (req, res) => res.send("pong"));
-
+ 
 // ── BOT CONTROL ─────────────────────────────────────────────
 app.post("/start", (req, res) => {
   if (botRunning) return res.json({ success: false, msg: "Already running" });
@@ -135,7 +135,7 @@ app.post("/start", (req, res) => {
   addLog("[Control] Bot started");
   res.json({ success: true });
 });
-
+ 
 app.post("/stop", (req, res) => {
   if (!botRunning) return res.json({ success: false, msg: "Already stopped" });
   botRunning = false;
@@ -144,7 +144,7 @@ app.post("/stop", (req, res) => {
   addLog("[Control] Bot stopped");
   res.json({ success: true });
 });
-
+ 
 app.post("/command", (req, res) => {
   const cmd = (req.body.command || "").trim();
   if (!cmd) return res.json({ success: false, msg: "Empty command." });
@@ -158,12 +158,12 @@ app.post("/command", (req, res) => {
     return res.json({ success: false, msg: err.message });
   }
 });
-
+ 
 // ── DASHBOARD HTML ────────────────────────────────────────
 app.get("/", (req, res) => {
   const botName = (config.name || "Bot").replace(/</g, "&lt;");
   const serverIp = (config.server.ip || "").replace(/</g, "&lt;");
-
+ 
   const html = '<!DOCTYPE html>\n' +
 '<html lang="en">\n' +
 '<head>\n' +
@@ -638,10 +638,10 @@ app.get("/", (req, res) => {
 '</script>\n' +
 '</body>\n' +
 '</html>';
-
+ 
   res.send(html);
 });
-
+ 
 // ── SERVER ───────────────────────────────────────────────────
 const server = app.listen(PORT, "0.0.0.0", () => {
   addLog(`[Server] HTTP server started on port ${server.address().port}`);
@@ -654,36 +654,98 @@ server.on("error", (err) => {
     addLog(`[Server] Error: ${err.message}`);
   }
 });
-
+ 
 function formatUptime(s){return Math.floor(s/3600)+'h '+Math.floor((s%3600)/60)+'m '+(s%60)+'s';}
-
+ 
+// ── IMPROVED SELF-PING FOR RAILWAY & RENDER (24/7 OPERATION) ──
 function startSelfPing(){
-  const url=process.env.RENDER_EXTERNAL_URL||process.env.RAILWAY_STATIC_URL;
-  if(!url){addLog("[KeepAlive] No external URL — self-ping disabled");return;}
-  setInterval(()=>{
-    const p=url.startsWith("https")?https:http;
-    p.get(url+"/ping",()=>{}).on("error",e=>addLog(`[KeepAlive] Ping failed: ${e.message}`));
-  },10*60*1000);
-  addLog("[KeepAlive] Self-ping started");
+  // Platform detection - works on Railway AND Render
+  let url = null;
+ 
+  // Check for Railway (modern)
+  if (process.env.RAILWAY_PUBLIC_DOMAIN) {
+    url = `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`;
+    addLog(`[KeepAlive] Railway detected: ${url}`);
+  }
+  // Check for Railway (legacy)
+  else if (process.env.RAILWAY_STATIC_URL) {
+    url = process.env.RAILWAY_STATIC_URL;
+    if (!url.startsWith("http")) url = `https://${url}`;
+    addLog(`[KeepAlive] Railway (legacy) detected: ${url}`);
+  }
+  // Check for Render
+  else if (process.env.RENDER_EXTERNAL_URL) {
+    url = process.env.RENDER_EXTERNAL_URL;
+    addLog(`[KeepAlive] Render detected: ${url}`);
+  }
+  // Check for Replit
+  else if (process.env.REPL_SLUG && process.env.REPL_OWNER) {
+    url = `https://${process.env.REPL_SLUG}.${process.env.REPL_OWNER}.repl.co`;
+    addLog(`[KeepAlive] Replit detected: ${url}`);
+  }
+  // Fallback: try to detect from PORT (local development)
+  else if (process.env.PORT) {
+    addLog("[KeepAlive] ⚠️ No platform URL detected - running in local mode");
+    addLog("[KeepAlive] Self-ping disabled (not needed for local development)");
+    return;
+  }
+ 
+  if(!url) {
+    addLog("[KeepAlive] ❌ Could not detect platform URL!");
+    addLog("[KeepAlive] For 24/7 operation, set one of these environment variables:");
+    addLog("[KeepAlive]   - RAILWAY_PUBLIC_DOMAIN (Railway)");
+    addLog("[KeepAlive]   - RENDER_EXTERNAL_URL (Render)");
+    addLog("[KeepAlive] Or use UptimeRobot (free) to ping your bot URL");
+    return;
+  }
+ 
+  // Clean the URL
+  url = url.replace(/\/$/, '');
+  addLog(`[KeepAlive] ✅ Self-ping enabled for: ${url}`);
+  addLog(`[KeepAlive] ⏰ Pinging every 4 minutes to prevent sleeping`);
+ 
+  // Ping every 4 minutes (Render/Railway free tiers sleep after 15-30 min)
+  setInterval(() => {
+    const pingUrl = `${url}/ping`;
+    const protocol = pingUrl.startsWith("https") ? https : http;
+ 
+    protocol.get(pingUrl, (res) => {
+      // Only log errors, not successes (to keep logs clean)
+      if (res.statusCode !== 200) {
+        addLog(`[KeepAlive] ⚠️ Ping returned ${res.statusCode}`);
+      }
+    }).on("error", (e) => {
+      addLog(`[KeepAlive] ❌ Ping failed: ${e.message}`);
+    });
+  }, 4 * 60 * 1000); // Every 4 minutes
 }
+ 
+// Start self-ping (will auto-detect Railway or Render)
 startSelfPing();
-
-setInterval(()=>{
-  addLog(`[Memory] Heap: ${(process.memoryUsage().heapUsed/1024/1024).toFixed(2)} MB`);
-},5*60*1000);
-
+ 
+// Memory monitoring
+setInterval(() => {
+  const memUsed = process.memoryUsage().heapUsed / 1024 / 1024;
+  addLog(`[Memory] Heap: ${memUsed.toFixed(2)} MB`);
+ 
+  // Warning if memory is high (prevent crashes)
+  if (memUsed > 500) {
+    addLog(`[Memory] ⚠️ High memory usage: ${memUsed.toFixed(2)} MB`);
+  }
+}, 5 * 60 * 1000);
+ 
 function clearBotTimeouts(){
   if(reconnectTimeoutId){clearTimeout(reconnectTimeoutId);reconnectTimeoutId=null;}
   if(connectionTimeoutId){clearTimeout(connectionTimeoutId);connectionTimeoutId=null;}
 }
 function clearAllIntervals(){activeIntervals.forEach(id=>clearInterval(id));activeIntervals=[];}
 function addInterval(cb,delay){const id=setInterval(cb,delay);activeIntervals.push(id);return id;}
-
+ 
 const KICK_REASONS={
   PROXY_DUPLICATE:"already connected to this proxy",
   THROTTLE_KEYWORDS:["throttl","wait before reconnect","too fast"],
 };
-
+ 
 function getReconnectDelay(){
   const r=(lastKickReason||"").toLowerCase();
   if(r.includes(KICK_REASONS.PROXY_DUPLICATE))return 65000+Math.floor(Math.random()*15000);
@@ -695,7 +757,7 @@ function getReconnectDelay(){
   const max=config.utils["max-reconnect-delay"]||30000;
   return Math.min(base*Math.pow(2,botState.reconnectAttempts),max)+Math.floor(Math.random()*2000);
 }
-
+ 
 function createBot(){
   if(!botRunning)return;
   if(isReconnecting){addLog("[Bot] Already reconnecting...");return;}
@@ -778,7 +840,7 @@ function createBot(){
     scheduleReconnect();
   }
 }
-
+ 
 function scheduleReconnect(){
   if(!botRunning)return;
   clearBotTimeouts();
@@ -790,7 +852,7 @@ function scheduleReconnect(){
     reconnectTimeoutId=null;isReconnecting=false;lastKickReason=null;createBot();
   },delay);
 }
-
+ 
 function initializeModules(bot,mcData,defaultMove){
   addLog("[Modules] Initializing...");
   if(config.utils["auto-auth"]?.enabled){
@@ -854,7 +916,7 @@ function initializeModules(bot,mcData,defaultMove){
   }
   addLog("[Modules] All initialized!");
 }
-
+ 
 const readline=require("readline");
 const rl=readline.createInterface({input:process.stdin,output:process.stdout,terminal:false});
 rl.on("line",line=>{
@@ -865,7 +927,7 @@ rl.on("line",line=>{
   else if(t==="status")addLog(`Connected: ${botState.connected}, Uptime: ${formatUptime(Math.floor((Date.now()-botState.startTime)/1000))}`);
   else safeBotChat(t);
 });
-
+ 
 process.on("uncaughtException",err=>{
   const msg=err?.message||String(err)||"Unknown";
   try{addLog(`[FATAL] ${msg}`);}catch(_){}
@@ -877,7 +939,7 @@ process.on("uncaughtException",err=>{
   }catch(_){}
   setTimeout(()=>{try{scheduleReconnect();}catch(e){}},isNet?5000:10000);
 });
-
+ 
 process.on("unhandledRejection",reason=>{
   const msg=String(reason);
   addLog(`[FATAL] Rejection: ${msg}`);
@@ -888,15 +950,15 @@ process.on("unhandledRejection",reason=>{
     scheduleReconnect();
   }
 });
-
+ 
 process.on("SIGTERM",()=>addLog("[System] SIGTERM — ignoring."));
 process.on("SIGINT",()=>addLog("[System] SIGINT — ignoring."));
-
+ 
 addLog("=".repeat(50));
 addLog("  Minecraft AFK Bot v3.0");
 addLog("=".repeat(50));
 addLog(`Server: ${config.server.ip}:${config.server.port}`);
 addLog(`Version: ${config.server.version||"auto-detect"}`);
 addLog("=".repeat(50));
-
+ 
 createBot();
